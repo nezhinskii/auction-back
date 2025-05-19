@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.Threading;
+using System;
+using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace AuctionService.Controllers
 {
@@ -23,13 +26,146 @@ namespace AuctionService.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetActiveAuctions()
+        public async Task<IActionResult> GetActiveAuctions([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
         {
-            var auctions = await _context.Auctions
+            if (pageNumber < 1 || pageSize < 1)
+                return BadRequest("Invalid page number or page size");
+
+            var query = _context.Auctions
                 .Where(a => a.Status == "Open")
                 .Include(a => a.Owner)
+                .AsQueryable();
+
+            var totalCount = await query.CountAsync();
+
+            var auctions = await query
+                .OrderByDescending(a => a.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new AuctionDto
+                {
+                    Id = a.Id,
+                    Title = a.Title,
+                    Description = a.Description,
+                    Status = a.Status,
+                    ImageUrl = a.ImageUrl,
+                    OwnerId = a.OwnerId,
+                    OwnerUsername = a.Owner.UserName,
+                    WinnerId = null,
+                    WinnerUsername = null,
+                    CreatedAt = a.CreatedAt,
+                    UpdatedAt = a.UpdatedAt,
+                    Price = a.Price
+                })
                 .ToListAsync();
-            return Ok(auctions);
+
+            var result = new PagedAuctionResultDto
+            {
+                Auctions = auctions,
+                TotalCount = totalCount,
+                PageNumber = pageNumber,
+                PageSize = pageSize
+            };
+
+            return Ok(result);
+        }
+
+        [Authorize]
+        [HttpGet("created")]
+        public async Task<IActionResult> GetUserCreatedAuctions([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        {
+            if (pageNumber < 1 || pageSize < 1)
+                return BadRequest("Invalid page number or page size");
+
+            var userId = int.Parse(User.Identity.Name);
+
+            var query = _context.Auctions
+                .Where(a => a.OwnerId == userId)
+                .Include(a => a.Owner)
+                .Include(a => a.Winner)
+                .AsQueryable();
+
+            var totalCount = await query.CountAsync();
+
+            var auctions = await query
+                .OrderByDescending(a => a.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new AuctionDto
+                {
+                    Id = a.Id,
+                    Title = a.Title,
+                    Description = a.Description,
+                    Status = a.Status,
+                    ImageUrl = a.ImageUrl,
+                    OwnerId = a.OwnerId,
+                    OwnerUsername = a.Owner.UserName,
+                    WinnerId = a.WinnerId,
+                    WinnerUsername = a.Winner != null ? a.Winner.UserName : null,
+                    CreatedAt = a.CreatedAt,
+                    UpdatedAt = a.UpdatedAt,
+                    Price = a.Price
+                })
+                .ToListAsync();
+
+            var result = new PagedAuctionResultDto
+            {
+                Auctions = auctions,
+                TotalCount = totalCount,
+                PageNumber = pageNumber,
+                PageSize = pageSize
+            };
+
+            return Ok(result);
+        }
+
+        [Authorize]
+        [HttpGet("participated")]
+        public async Task<IActionResult> GetUserParticipatedAuctions([FromQuery] int pageNumber = 1, [FromQuery] int pageSize = 10)
+        {
+            if (pageNumber < 1 || pageSize < 1)
+                return BadRequest("Invalid page number or page size");
+
+            var userId = int.Parse(User.Identity.Name);
+
+            var query = _context.Auctions
+                .Where(a => a.Bids.Any(b => b.UserId == userId))
+                .Include(a => a.Owner)
+                .Include(a => a.Winner)
+                .AsQueryable();
+
+            var totalCount = await query.CountAsync();
+
+            var auctions = await query
+                .OrderByDescending(a => a.CreatedAt)
+                .Skip((pageNumber - 1) * pageSize)
+                .Take(pageSize)
+                .Select(a => new AuctionDto
+                {
+                    Id = a.Id,
+                    Title = a.Title,
+                    Description = a.Description,
+                    Status = a.Status,
+                    ImageUrl = a.ImageUrl,
+                    OwnerId = a.OwnerId,
+                    OwnerUsername = a.Owner.UserName,
+                    WinnerId = a.WinnerId,
+                    WinnerUsername = a.Winner != null ? a.Winner.UserName : null,
+                    CreatedAt = a.CreatedAt,
+                    UpdatedAt = a.UpdatedAt,
+                    Price = a.Price
+                })
+                .ToListAsync();
+
+            var result = new PagedAuctionResultDto
+            {
+                Auctions = auctions,
+                TotalCount = totalCount,
+                PageNumber = pageNumber,
+                PageSize = pageSize
+            };
+
+            return Ok(result);
         }
 
         [Authorize]
@@ -46,7 +182,8 @@ namespace AuctionService.Controllers
                 Description = dto.Description,
                 OwnerId = int.Parse(User.Identity.Name),
                 Status = "Open",
-                Bids = new List<Bid>()
+                Bids = new List<Bid>(),
+                Price = null
             };
 
             if (dto.Image != null)
@@ -69,7 +206,25 @@ namespace AuctionService.Controllers
 
             await _hubContext.Clients.All.SendAsync("ReceiveNewAuctionNotification", auction.Id, auction.Title);
 
-            return CreatedAtAction(nameof(GetAuctionById), new { id = auction.Id }, auction);
+            var fetchedAuction = await _context.Auctions
+                .Include(a => a.Owner)
+                .FirstOrDefaultAsync(a => a.Id == auction.Id);
+
+            return CreatedAtAction(nameof(GetAuctionById), new { id = auction.Id }, new AuctionDto
+            {
+                Id = fetchedAuction.Id,
+                Title = fetchedAuction.Title,
+                Description = fetchedAuction.Description,
+                Status = fetchedAuction.Status,
+                ImageUrl = fetchedAuction.ImageUrl,
+                OwnerId = fetchedAuction.OwnerId,
+                OwnerUsername = fetchedAuction.Owner?.UserName,
+                WinnerId = fetchedAuction.WinnerId,
+                WinnerUsername = null,
+                CreatedAt = fetchedAuction.CreatedAt,
+                UpdatedAt = fetchedAuction.UpdatedAt,
+                Price = fetchedAuction.Price
+            });
         }
 
         [HttpGet("{id}")]
@@ -78,14 +233,46 @@ namespace AuctionService.Controllers
             var auction = await _context.Auctions
                 .Include(a => a.Owner)
                 .Include(a => a.Winner)
-                .Include(a => a.Bids)
-                .ThenInclude(b => b.User)
                 .FirstOrDefaultAsync(a => a.Id == id);
 
             if (auction == null)
                 return NotFound();
 
-            return Ok(auction);
+            return Ok(new AuctionDto
+            {
+                Id = auction.Id,
+                Title = auction.Title,
+                Description = auction.Description,
+                Status = auction.Status,
+                ImageUrl = auction.ImageUrl,
+                OwnerId = auction.OwnerId,
+                OwnerUsername = auction.Owner?.UserName,
+                WinnerId = auction.WinnerId,
+                WinnerUsername = auction.Winner != null ? auction.Winner.UserName : null,
+                CreatedAt = auction.CreatedAt,
+                UpdatedAt = auction.UpdatedAt,
+                Price = auction.Price
+            });
+        }
+
+        [HttpGet("{auctionId}/bids")]
+        public async Task<IActionResult> GetAuctionBids(int auctionId)
+        {
+            var bids = await _context.Bids
+                .Where(b => b.AuctionId == auctionId)
+                .Include(b => b.User)
+                .OrderByDescending(b => b.BidTime)
+                .ToListAsync();
+
+            return Ok(bids.Select(b => new BidDto
+            {
+                Id = b.Id,
+                Amount = b.Amount,
+                BidTime = b.BidTime,
+                UserId = b.User.Id,
+                UserName = b.User.UserName,
+                AuctionId = b.AuctionId
+            }));
         }
 
         [Authorize]
@@ -125,7 +312,7 @@ namespace AuctionService.Controllers
             auction.Status = "Closing";
             await _context.SaveChangesAsync();
 
-            await _hubContext.Clients.Group($"Auction_{id}").SendAsync("ReceiveAuctionStatusUpdate", id, "Closing");
+            await _hubContext.Clients.All.SendAsync("ReceiveAuctionStatusUpdate", id, "Closing");
 
             return Ok();
         }
@@ -154,9 +341,10 @@ namespace AuctionService.Controllers
 
             auction.Status = "Sold";
             auction.WinnerId = winningBid.UserId;
+            auction.Price = winningBid.Amount;
             await _context.SaveChangesAsync();
 
-            await _hubContext.Clients.Group($"Auction_{id}").SendAsync("ReceiveAuctionStatusUpdate", id, "Sold");
+            await _hubContext.Clients.All.SendAsync("ReceiveAuctionStatusUpdate", id, "Sold");
 
             return Ok();
         }
@@ -166,8 +354,8 @@ namespace AuctionService.Controllers
         public async Task<IActionResult> PlaceBid(int id, [FromBody] PlaceBidDto dto)
         {
             var auction = await _context.Auctions
-                .Include(a => a.Bids)
-                .FirstOrDefaultAsync(a => a.Id == id);
+        .Include(a => a.Bids)
+        .FirstOrDefaultAsync(a => a.Id == id);
 
             if (auction == null)
                 return NotFound();
@@ -188,10 +376,23 @@ namespace AuctionService.Controllers
             };
 
             _context.Bids.Add(bid);
+            auction.Bids.Add(bid);
+            auction.Price = auction.Bids.Max(b => b.Amount);
+            auction.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
             var user = await _context.Users.FindAsync(userId);
-            await _hubContext.Clients.Group($"Auction_{id}").SendAsync("ReceiveBidUpdate", id, user.UserName, dto.Amount);
+            var bidDto = new BidDto
+            {
+                Id = bid.Id,
+                Amount = bid.Amount,
+                UserId = userId,
+                UserName = user.UserName,
+                BidTime = bid.BidTime,
+                AuctionId = bid.AuctionId
+            };
+
+            await _hubContext.Clients.Group($"Auction_{id}").SendAsync("ReceiveBidUpdate", bidDto);
 
             return Ok();
         }

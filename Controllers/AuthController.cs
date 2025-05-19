@@ -1,5 +1,6 @@
 ﻿using AuctionService.DTOs;
 using AuctionService.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
@@ -29,6 +30,10 @@ namespace AuctionService.Controllers
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
+
+            var existingUser = await _userManager.FindByNameAsync(model.Username);
+            if (existingUser != null)
+                return BadRequest(new { Errors = new[] { new { Code = "DuplicateUserName", Description = "Username already exists" } } });
 
             var user = new User { UserName = model.Username, Email = model.Email };
             var result = await _userManager.CreateAsync(user, model.Password);
@@ -66,11 +71,35 @@ namespace AuctionService.Controllers
                 return Ok(new
                 {
                     token = new JwtSecurityTokenHandler().WriteToken(token),
-                    expiration = token.ValidTo
+                    expiration = token.ValidTo,
+                    user = new UserDto
+                    {
+                        Id = user.Id,
+                        Username = user.UserName,
+                        Email = user.Email
+                    }
                 });
             }
 
             return Unauthorized();
+        }
+
+        [Authorize]
+        [HttpGet("me")]
+        public async Task<IActionResult> GetMe()
+        {
+            var userId = int.Parse(User.Identity.Name);
+            var user = await _userManager.FindByIdAsync(userId.ToString());
+
+            if (user == null)
+                return NotFound("User not found");
+
+            return Ok(new UserDto
+            {
+                Id = user.Id,
+                Username = user.UserName,
+                Email = user.Email
+            });
         }
     }
 }

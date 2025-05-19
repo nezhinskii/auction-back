@@ -12,5 +12,8 @@
         public List<Bid> Bids { get; set; }
         public int? WinnerId { get; set; }
         public User? Winner { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime UpdatedAt { get; set; }
+        public decimal? Price { get; set; }
     }
 }
