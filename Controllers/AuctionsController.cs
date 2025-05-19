@@ -354,8 +354,9 @@ namespace AuctionService.Controllers
         public async Task<IActionResult> PlaceBid(int id, [FromBody] PlaceBidDto dto)
         {
             var auction = await _context.Auctions
-        .Include(a => a.Bids)
-        .FirstOrDefaultAsync(a => a.Id == id);
+                .Include(a => a.Bids)
+                .ThenInclude(b => b.User)
+                .FirstOrDefaultAsync(a => a.Id == id);
 
             if (auction == null)
                 return NotFound();
@@ -366,6 +367,9 @@ namespace AuctionService.Controllers
             var userId = int.Parse(User.Identity.Name);
             if (auction.OwnerId == userId)
                 return BadRequest("Owner cannot bid on their own auction");
+
+            var currentMaxBid = auction.Bids.Any() ? auction.Bids.Max(b => b.Amount) : 0;
+            var previousMaxBid = auction.Bids.FirstOrDefault(b => b.Amount == currentMaxBid);
 
             var bid = new Bid
             {
@@ -393,6 +397,12 @@ namespace AuctionService.Controllers
             };
 
             await _hubContext.Clients.Group($"Auction_{id}").SendAsync("ReceiveBidUpdate", bidDto);
+
+            if (previousMaxBid != null && dto.Amount > currentMaxBid && previousMaxBid.UserId != userId)
+            {
+                await _hubContext.Clients.User(previousMaxBid.UserId.ToString())
+                    .SendAsync("ReceiveOutbidNotification", auction.Id, auction.Title, dto.Amount);
+            }
 
             return Ok();
         }

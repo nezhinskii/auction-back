@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -44,6 +45,20 @@ builder.Services.AddAuthentication(options =>
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = context =>
+        {
+            var nameClaim = context.Principal.FindFirst(ClaimTypes.Name)?.Value;
+            if (!string.IsNullOrEmpty(nameClaim))
+            {
+                var identity = context.Principal.Identity as ClaimsIdentity;
+                //ClaimTypes.NameIdentifier — это claim, который SignalR по умолчанию использует для заполнения Context.UserIdentifier
+                identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, nameClaim));
+            }
+            return Task.CompletedTask;
+        },
     };
 });
 
